@@ -1,6 +1,6 @@
 [package]
 name = "miden-client-tools"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A wrapper on top of the Miden client that simplifies interactions with the Miden blockchain."
 license = "MIT" 
