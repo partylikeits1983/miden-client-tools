@@ -10,10 +10,15 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use miden_client::account::{AccountBuilder, AccountStorageMode, AccountType, StorageSlot};
     use miden_client::rpc::Endpoint;
     use miden_client::{account::AccountId, keystore::FilesystemKeyStore, note::NoteType};
     use miden_client_tools::{create_basic_faucet, create_library, create_tx_script};
     use miden_crypto::{Felt, Word};
+    use miden_lib::account::wallets::BasicWallet;
+    use miden_lib::transaction::TransactionKernel;
+    use miden_objects::account::AccountComponent;
+    use rand::RngCore;
 
     #[tokio::test]
     async fn test_instantiate_client_with_default_store() {
@@ -124,6 +129,59 @@ mod tests {
         let faucet = create_basic_faucet(&mut client, keystore).await.unwrap();
 
         let result = mint_from_faucet_for_account(&mut client, &account, &faucet, 100, None).await;
+        assert!(result.is_ok());
+
+        delete_keystore_and_store(None).await;
+    }
+
+    #[tokio::test]
+    async fn test_mint_from_faucet_for_custom_account() {
+        let endpoint = Endpoint::localhost();
+        let mut client = instantiate_client(endpoint, None).await.unwrap();
+        client.sync_state().await.unwrap();
+
+        let keystore = FilesystemKeyStore::new("./keystore".into()).unwrap();
+
+        let account_code = fs::read_to_string(Path::new("./masm/accounts/counter.masm")).unwrap();
+        let tx_script_code =
+            fs::read_to_string(Path::new("./masm/scripts/increment_script.masm")).unwrap();
+
+        let library_path = "external_contract::counter_contract";
+        let library = create_library(account_code.clone(), library_path).unwrap();
+
+        let tx_script = create_tx_script(tx_script_code, Some(library)).unwrap();
+
+        let assembler = TransactionKernel::assembler().with_debug_mode(true);
+        let empty_storage_slot = StorageSlot::empty_value();
+        let account_component = AccountComponent::compile(
+            account_code.clone(),
+            assembler.clone(),
+            vec![empty_storage_slot],
+        )
+        .unwrap()
+        .with_supports_all_types();
+
+        let mut init_seed = [0_u8; 32];
+        client.rng().fill_bytes(&mut init_seed);
+
+        let anchor_block = client.get_latest_epoch_block().await.unwrap();
+        let builder = AccountBuilder::new(init_seed)
+            .anchor((&anchor_block).try_into().unwrap())
+            .account_type(AccountType::RegularAccountUpdatableCode)
+            .storage_mode(AccountStorageMode::Public)
+            .with_component(account_component)
+            .with_component(BasicWallet);
+        let (account, seed) = builder.build().unwrap();
+        client
+            .add_account(&account, Some(seed), false)
+            .await
+            .unwrap();
+
+        let faucet = create_basic_faucet(&mut client, keystore).await.unwrap();
+
+        let result =
+            mint_from_faucet_for_account(&mut client, &account, &faucet, 100, Some(tx_script))
+                .await;
         assert!(result.is_ok());
 
         delete_keystore_and_store(None).await;
