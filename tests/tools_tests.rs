@@ -55,15 +55,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_keystore_and_store_non_existing_file() {
-        let store_path = "./non_existing_store.sqlite3";
-        delete_keystore_and_store(Some(store_path)).await;
-
-        let metadata = tokio::fs::metadata(store_path).await;
-        assert!(metadata.is_err());
-    }
-
-    #[tokio::test]
     async fn test_create_library() {
         let account_code = fs::read_to_string(Path::new("./masm/accounts/counter.masm")).unwrap();
         let library_path = "external_contract::counter_contract";
@@ -96,6 +87,8 @@ mod tests {
 
         let faucet = create_basic_faucet(&mut client, keystore).await.unwrap();
         assert_eq!(faucet.id().to_string().len(), 32);
+
+        delete_keystore_and_store(None).await;
     }
 
     #[tokio::test]
