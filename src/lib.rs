@@ -341,7 +341,7 @@ pub async fn setup_accounts_and_faucets(
 /// Mints tokens from a faucet to an account.
 ///
 /// This function mints a specified amount of tokens from a faucet to an account, and waits for the transaction
-/// to be confirmed.
+/// to be confirmed. It optionally executes a custom transaction script if provided.
 ///
 /// # Arguments
 ///
@@ -349,15 +349,18 @@ pub async fn setup_accounts_and_faucets(
 /// * `account` - The account that will receive the tokens.
 /// * `faucet` - The faucet to mint tokens from.
 /// * `amount` - The number of tokens to mint.
+/// * `tx_script` - An optional custom transaction script to execute after the minting transaction. If `None`, no script is executed.
 ///
 /// # Returns
 ///
-/// Returns a `Result` indicating whether the minting process was successful or not.
+/// Returns a `Result` indicating whether the minting process was successful or not. If the transaction script is provided, it will also be executed
+/// after the minting process, otherwise, only the minting transaction is processed.
 pub async fn mint_from_faucet_for_account(
     client: &mut Client,
     account: &Account,
     faucet: &Account,
     amount: u64,
+    tx_script: Option<TransactionScript>, // Make tx_script optional
 ) -> Result<(), ClientError> {
     if amount == 0 {
         return Ok(());
@@ -382,12 +385,19 @@ pub async fn mint_from_faucet_for_account(
     wait_for_notes(client, account, 1).await?;
     client.sync_state().await?;
 
-    let consume_req = TransactionRequestBuilder::new()
-        .with_authenticated_input_notes([(minted_note.id(), None)])
-        .build()?;
+    let consume_req = if let Some(script) = tx_script {
+        TransactionRequestBuilder::new()
+            .with_authenticated_input_notes([(minted_note.id(), None)])
+            .with_custom_script(script)
+            .build()?
+    } else {
+        TransactionRequestBuilder::new()
+            .with_authenticated_input_notes([(minted_note.id(), None)])
+            .build()?
+    };
 
     let consume_exec = client.new_transaction(account.id(), consume_req).await?;
-    client.submit_transaction(consume_exec).await?;
+    client.submit_transaction(consume_exec.clone()).await?;
     client.sync_state().await?;
 
     Ok(())

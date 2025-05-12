@@ -123,7 +123,7 @@ mod tests {
             .unwrap();
         let faucet = create_basic_faucet(&mut client, keystore).await.unwrap();
 
-        let result = mint_from_faucet_for_account(&mut client, &account, &faucet, 100).await;
+        let result = mint_from_faucet_for_account(&mut client, &account, &faucet, 100, None).await;
         assert!(result.is_ok());
 
         delete_keystore_and_store(None).await;
