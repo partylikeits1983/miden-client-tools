@@ -378,17 +378,14 @@ pub async fn mint_from_faucet_for_account(
         _ => panic!("Expected full minted note"),
     };
 
-    wait_for_notes(client, account, 1).await?;
-    client.sync_state().await?;
-
     let consume_req = if let Some(script) = tx_script {
         TransactionRequestBuilder::new()
-            .with_authenticated_input_notes([(minted_note.id(), None)])
+            .with_unauthenticated_input_notes([(minted_note, None)])
             .with_custom_script(script)
             .build()?
     } else {
         TransactionRequestBuilder::new()
-            .with_authenticated_input_notes([(minted_note.id(), None)])
+            .with_unauthenticated_input_notes([(minted_note, None)])
             .build()?
     };
 
