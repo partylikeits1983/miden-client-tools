@@ -1216,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "miden-client-tools"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "miden-assembly",
  "miden-client",
