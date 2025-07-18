@@ -1,7 +1,6 @@
 use miden_client_tools::{
     create_basic_account, create_exact_p2id_note, create_public_note, delete_keystore_and_store,
     instantiate_client, mint_from_faucet_for_account, setup_accounts_and_faucets, wait_for_note,
-    wait_for_notes,
 };
 
 #[cfg(test)]
@@ -221,39 +220,6 @@ mod tests {
 
         let result = wait_for_note(&mut client, &note).await;
 
-        assert!(result.is_ok());
-
-        delete_keystore_and_store(None).await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_wait_for_notes() -> Result<(), Box<dyn std::error::Error>> {
-        let endpoint = Endpoint::localhost();
-        let mut client = instantiate_client(endpoint, None).await.unwrap();
-        client.sync_state().await.unwrap();
-
-        let keystore = FilesystemKeyStore::new("./keystore".into()).unwrap();
-
-        let (account, _) = create_basic_account(&mut client, keystore).await.unwrap();
-
-        let note_code = fs::read_to_string(Path::new("./masm/notes/increment_note.masm")).unwrap();
-
-        let account_code = fs::read_to_string(Path::new("./masm/accounts/counter.masm")).unwrap();
-        let library_path = "external_contract::counter_contract";
-        let library = create_library(account_code, library_path).unwrap();
-
-        let _note = create_public_note(
-            &mut client,
-            note_code,
-            Some(library),
-            account.clone(),
-            None,
-            None,
-        )
-        .await?;
-
-        let result = wait_for_notes(&mut client, &account, 1).await;
         assert!(result.is_ok());
 
         delete_keystore_and_store(None).await;

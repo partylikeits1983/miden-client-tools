@@ -318,7 +318,7 @@ pub async fn setup_accounts_and_faucets(
                 panic!("Expected OutputNote::Full, but got something else");
             };
 
-            wait_for_notes(client, account, 1).await?;
+            wait_for_note(client, &minted_note).await?;
             client.sync_state().await?;
 
             let consume_req = TransactionRequestBuilder::new()
@@ -495,40 +495,6 @@ pub async fn wait_for_note(client: &mut Client, expected: &Note) -> Result<(), C
         }
 
         println!("Note {} not found. Waiting...", expected.id().to_hex());
-        sleep(Duration::from_secs(3)).await;
-    }
-    Ok(())
-}
-
-/// Waits for a specific number of notes to be available.
-///
-/// This function will block until the specified number of consumable notes are found for the account.
-///
-/// # Arguments
-///
-/// * `client` - The Miden client used to interact with the blockchain.
-/// * `account_id` - The account ID to check for the notes.
-/// * `expected` - The number of notes to wait for.
-///
-/// # Returns
-///
-/// Returns a `Result` indicating whether the expected number of notes was found.
-pub async fn wait_for_notes(
-    client: &mut Client,
-    account_id: &miden_client::account::Account,
-    expected: usize,
-) -> Result<(), ClientError> {
-    loop {
-        client.sync_state().await?;
-        let notes = client.get_consumable_notes(Some(account_id.id())).await?;
-        if notes.len() >= expected {
-            break;
-        }
-        println!(
-            "{} consumable notes found for account {}. Waiting...",
-            notes.len(),
-            account_id.id().to_hex()
-        );
         sleep(Duration::from_secs(3)).await;
     }
     Ok(())
