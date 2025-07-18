@@ -20,10 +20,10 @@ use miden_client::{
     keystore::FilesystemKeyStore,
     note::{
         Note, NoteAssets, NoteExecutionHint, NoteExecutionMode, NoteInputs, NoteMetadata,
-        NoteRecipient, NoteRelevance, NoteScript, NoteTag, NoteType,
+        NoteRecipient, NoteScript, NoteTag, NoteType,
     },
     rpc::{Endpoint, TonicRpcClient},
-    store::InputNoteRecord,
+    store::NoteFilter,
     transaction::{OutputNote, TransactionKernel, TransactionRequestBuilder, TransactionScript},
 };
 use miden_lib::note::utils;
@@ -48,9 +48,9 @@ pub async fn instantiate_client(
     let rpc_api = Arc::new(TonicRpcClient::new(&endpoint, timeout_ms));
 
     let client = ClientBuilder::new()
-        .with_rpc(rpc_api.clone())
-        .with_filesystem_keystore("./keystore")
-        .with_sqlite_store(store_path.unwrap_or("./store.sqlite3"))
+        .rpc(rpc_api.clone())
+        .filesystem_keystore("./keystore")
+        .sqlite_store(store_path.unwrap_or("./store.sqlite3"))
         .in_debug_mode(true)
         .build()
         .await?;
@@ -200,13 +200,13 @@ pub async fn create_basic_account(
     client.rng().fill_bytes(&mut init_seed);
 
     let key_pair = SecretKey::with_rng(client.rng());
-    let anchor_block = client.get_latest_epoch_block().await.unwrap();
     let builder = AccountBuilder::new(init_seed)
-        .anchor((&anchor_block).try_into().unwrap())
+        // .anchor((&anchor_block).try_into().unwrap())
         .account_type(AccountType::RegularAccountUpdatableCode)
         .storage_mode(AccountStorageMode::Public)
-        .with_component(RpoFalcon512::new(key_pair.public_key().clone()))
+        .with_auth_component(RpoFalcon512::new(key_pair.public_key().clone()))
         .with_component(BasicWallet);
+
     let (account, seed) = builder.build().unwrap();
     client.add_account(&account, Some(seed), false).await?;
     keystore
@@ -233,15 +233,13 @@ pub async fn create_basic_faucet(
     let mut init_seed = [0u8; 32];
     client.rng().fill_bytes(&mut init_seed);
     let key_pair = SecretKey::with_rng(client.rng());
-    let anchor_block = client.get_latest_epoch_block().await.unwrap();
     let symbol = TokenSymbol::new("MID").unwrap();
     let decimals = 8;
     let max_supply = Felt::new(1_000_000);
     let builder = AccountBuilder::new(init_seed)
-        .anchor((&anchor_block).try_into().unwrap())
         .account_type(AccountType::FungibleFaucet)
         .storage_mode(AccountStorageMode::Public)
-        .with_component(RpoFalcon512::new(key_pair.public_key()))
+        .with_auth_component(RpoFalcon512::new(key_pair.public_key()))
         .with_component(BasicFungibleFaucet::new(symbol, decimals, max_supply).unwrap());
     let (account, seed) = builder.build().unwrap();
     client.add_account(&account, Some(seed), false).await?;
@@ -324,7 +322,7 @@ pub async fn setup_accounts_and_faucets(
             client.sync_state().await?;
 
             let consume_req = TransactionRequestBuilder::new()
-                .with_authenticated_input_notes([(minted_note.id(), None)])
+                .authenticated_input_notes([(minted_note.id(), None)])
                 .build()
                 .unwrap();
 
@@ -380,16 +378,20 @@ pub async fn mint_from_faucet_for_account(
 
     let consume_req = if let Some(script) = tx_script {
         TransactionRequestBuilder::new()
-            .with_unauthenticated_input_notes([(minted_note, None)])
-            .with_custom_script(script)
+            .unauthenticated_input_notes([(minted_note, None)])
+            .custom_script(script)
             .build()?
     } else {
         TransactionRequestBuilder::new()
-            .with_unauthenticated_input_notes([(minted_note, None)])
+            .unauthenticated_input_notes([(minted_note, None)])
             .build()?
     };
 
-    let consume_exec = client.new_transaction(account.id(), consume_req).await?;
+    let consume_exec = client
+        .new_transaction(account.id(), consume_req)
+        .await
+        .unwrap();
+
     client.submit_transaction(consume_exec.clone()).await?;
     client.sync_state().await?;
 
@@ -420,7 +422,7 @@ pub async fn create_public_note(
     creator_account: Account,
     assets: Option<NoteAssets>,
     note_inputs: Option<NoteInputs>,
-) -> Result<Note, Error> {
+) -> Result<Note, ClientError> {
     let assembler = if let Some(library) = account_library {
         TransactionKernel::assembler()
             .with_library(&library)
@@ -451,48 +453,44 @@ pub async fn create_public_note(
     let note = Note::new(assets, metadata, recipient);
 
     let note_req = TransactionRequestBuilder::new()
-        .with_own_output_notes(vec![OutputNote::Full(note.clone())])
+        .own_output_notes(vec![OutputNote::Full(note.clone())])
         .build()
         .unwrap();
     let tx_result = client
         .new_transaction(creator_account.id(), note_req)
-        .await
-        .unwrap();
+        .await?;
 
-    let _ = client.submit_transaction(tx_result).await;
-    client.sync_state().await.unwrap();
+    client.submit_transaction(tx_result).await?;
+    client.sync_state().await?;
 
     Ok(note)
 }
 
-/// Waits for the exact note to be available.
+/// Waits for the exact note to be available and committed.
 ///
-/// This function will block until the specified note is found in the account's consumable notes.
+/// This function will block until the specified note is found in the output notes and is committed.
 ///
 /// # Arguments
 ///
 /// * `client` - The Miden client used to interact with the blockchain.
-/// * `account_id` - The account ID to check for the note.
 /// * `expected` - The note to wait for.
 ///
 /// # Returns
 ///
-/// Returns a `Result` indicating whether the note was found.
-pub async fn wait_for_note(
-    client: &mut Client,
-    account_id: &Account,
-    expected: &Note,
-) -> Result<(), ClientError> {
+/// Returns a `Result` indicating whether the note was found and committed.
+pub async fn wait_for_note(client: &mut Client, expected: &Note) -> Result<(), ClientError> {
     loop {
         client.sync_state().await?;
 
-        let notes: Vec<(InputNoteRecord, Vec<(AccountId, NoteRelevance)>)> =
-            client.get_consumable_notes(Some(account_id.id())).await?;
+        let notes = client.get_output_notes(NoteFilter::All).await?;
 
-        let found = notes.iter().any(|(rec, _)| rec.id() == expected.id());
+        // Check if the expected note is in the output notes and is committed
+        let found = notes
+            .iter()
+            .any(|output_note| output_note.id() == expected.id() && output_note.is_committed());
 
         if found {
-            println!("✅ note found {}", expected.id().to_hex());
+            println!("✅ note found and committed {}", expected.id().to_hex());
             break;
         }
 
@@ -557,7 +555,7 @@ pub fn create_tx_script(
         None => Ok(assembler.with_debug_mode(true)),
     }
     .unwrap();
-    let tx_script = TransactionScript::compile(script_code, [], assembler).unwrap();
+    let tx_script = TransactionScript::compile(script_code, assembler).unwrap();
 
     Ok(tx_script)
 }
@@ -585,7 +583,7 @@ pub fn create_exact_p2id_note(
     serial_num: Word,
 ) -> Result<Note, NoteError> {
     let recipient = utils::build_p2id_recipient(target, serial_num)?;
-    let tag = NoteTag::from_account_id(target, NoteExecutionMode::Local)?;
+    let tag = NoteTag::from_account_id(target);
 
     let metadata = NoteMetadata::new(sender, note_type, tag, NoteExecutionHint::always(), aux)?;
     let vault = NoteAssets::new(assets)?;

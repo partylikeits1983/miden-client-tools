@@ -10,11 +10,13 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use miden_assembly::diagnostics::NamedSource;
     use miden_client::account::{AccountBuilder, AccountStorageMode, AccountType, StorageSlot};
     use miden_client::rpc::Endpoint;
-    use miden_client::{account::AccountId, keystore::FilesystemKeyStore, note::NoteType};
+    use miden_client::{
+        Felt, Word, account::AccountId, keystore::FilesystemKeyStore, note::NoteType,
+    };
     use miden_client_tools::{create_basic_faucet, create_library, create_tx_script};
-    use miden_crypto::{Felt, Word};
     use miden_lib::account::wallets::BasicWallet;
     use miden_lib::transaction::TransactionKernel;
     use miden_objects::account::AccountComponent;
@@ -58,13 +60,18 @@ mod tests {
     async fn test_create_library() {
         let account_code = fs::read_to_string(Path::new("./masm/accounts/counter.masm")).unwrap();
         let library_path = "external_contract::counter_contract";
-        let library = create_library(account_code, library_path);
+        let library = create_library(account_code.clone(), library_path);
+
+        let library_1 = TransactionKernel::assembler()
+            .assemble_library([NamedSource::new(library_path, account_code.clone())]);
 
         assert!(
             library.is_ok(),
             "Library creation failed: {:?}",
             library.err()
         );
+
+        assert_eq!(library.unwrap().digest(), library_1.unwrap().digest());
     }
 
     #[tokio::test]
@@ -154,16 +161,22 @@ mod tests {
         .unwrap()
         .with_supports_all_types();
 
+        let no_auth_code = fs::read_to_string(Path::new("./masm/auth/no_auth.masm")).unwrap();
+        let no_auth_component =
+            AccountComponent::compile(no_auth_code, assembler, vec![StorageSlot::empty_value()])
+                .unwrap()
+                .with_supports_all_types();
+
         let mut init_seed = [0_u8; 32];
         client.rng().fill_bytes(&mut init_seed);
 
-        let anchor_block = client.get_latest_epoch_block().await.unwrap();
         let builder = AccountBuilder::new(init_seed)
-            .anchor((&anchor_block).try_into().unwrap())
-            .account_type(AccountType::RegularAccountUpdatableCode)
+            .account_type(AccountType::RegularAccountImmutableCode)
             .storage_mode(AccountStorageMode::Public)
             .with_component(account_component)
-            .with_component(BasicWallet);
+            .with_component(BasicWallet)
+            .with_auth_component(no_auth_component);
+
         let (account, seed) = builder.build().unwrap();
         client
             .add_account(&account, Some(seed), false)
@@ -181,7 +194,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_public_note() {
+    async fn test_create_public_note() -> Result<(), Box<dyn std::error::Error>> {
         let endpoint = Endpoint::localhost();
         let mut client = instantiate_client(endpoint, None).await.unwrap();
         client.sync_state().await.unwrap();
@@ -204,18 +217,18 @@ mod tests {
             None,
             None,
         )
-        .await
-        .unwrap();
+        .await?;
 
-        let result = wait_for_note(&mut client, &account, &note).await;
+        let result = wait_for_note(&mut client, &note).await;
 
         assert!(result.is_ok());
 
         delete_keystore_and_store(None).await;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_wait_for_notes() {
+    async fn test_wait_for_notes() -> Result<(), Box<dyn std::error::Error>> {
         let endpoint = Endpoint::localhost();
         let mut client = instantiate_client(endpoint, None).await.unwrap();
         client.sync_state().await.unwrap();
@@ -238,13 +251,13 @@ mod tests {
             None,
             None,
         )
-        .await
-        .unwrap();
+        .await?;
 
         let result = wait_for_notes(&mut client, &account, 1).await;
         assert!(result.is_ok());
 
         delete_keystore_and_store(None).await;
+        Ok(())
     }
 
     #[tokio::test]
