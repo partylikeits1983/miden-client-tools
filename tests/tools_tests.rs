@@ -16,6 +16,7 @@ mod tests {
         Felt, Word, account::AccountId, keystore::FilesystemKeyStore, note::NoteType,
     };
     use miden_client_tools::{create_basic_faucet, create_library, create_tx_script};
+    use miden_lib::account::auth::{self};
     use miden_lib::account::wallets::BasicWallet;
     use miden_lib::transaction::TransactionKernel;
     use miden_objects::account::AccountComponent;
@@ -160,12 +161,6 @@ mod tests {
         .unwrap()
         .with_supports_all_types();
 
-        let no_auth_code = fs::read_to_string(Path::new("./masm/auth/no_auth.masm")).unwrap();
-        let no_auth_component =
-            AccountComponent::compile(no_auth_code, assembler, vec![StorageSlot::empty_value()])
-                .unwrap()
-                .with_supports_all_types();
-
         let mut init_seed = [0_u8; 32];
         client.rng().fill_bytes(&mut init_seed);
 
@@ -174,7 +169,7 @@ mod tests {
             .storage_mode(AccountStorageMode::Public)
             .with_component(account_component)
             .with_component(BasicWallet)
-            .with_auth_component(no_auth_component);
+            .with_auth_component(auth::NoAuth);
 
         let (account, seed) = builder.build().unwrap();
         client
