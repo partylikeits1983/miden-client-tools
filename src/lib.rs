@@ -8,10 +8,10 @@ use std::sync::Arc;
 use tokio::time::{Duration, sleep};
 
 use miden_client::{
-    Client, ClientError, Felt, Word,
+    Client as MidenClient, ClientError, DebugMode, Felt, ScriptBuilder, Word,
     account::{
         Account, AccountBuilder, AccountId, AccountStorageMode, AccountType,
-        component::{BasicFungibleFaucet, BasicWallet, RpoFalcon512},
+        component::{BasicFungibleFaucet, BasicWallet},
     },
     asset::{Asset, FungibleAsset, TokenSymbol},
     auth::AuthSecretKey,
@@ -26,9 +26,11 @@ use miden_client::{
     store::NoteFilter,
     transaction::{OutputNote, TransactionKernel, TransactionRequestBuilder, TransactionScript},
 };
-use miden_lib::note::utils;
+use miden_lib::{account::auth::AuthRpoFalcon512, note::utils};
 use miden_objects::{Hasher, NoteError, assembly::Library};
 use serde::de::value::Error;
+
+type Client = MidenClient<FilesystemKeyStore<rand::prelude::StdRng>>;
 
 /// Helper to instantiate a `Client` for interacting with Miden.
 ///
@@ -51,7 +53,7 @@ pub async fn instantiate_client(
         .rpc(rpc_api.clone())
         .filesystem_keystore("./keystore")
         .sqlite_store(store_path.unwrap_or("./store.sqlite3"))
-        .in_debug_mode(true)
+        .in_debug_mode(DebugMode::Enabled)
         .build()
         .await?;
 
@@ -204,7 +206,7 @@ pub async fn create_basic_account(
         // .anchor((&anchor_block).try_into().unwrap())
         .account_type(AccountType::RegularAccountUpdatableCode)
         .storage_mode(AccountStorageMode::Public)
-        .with_auth_component(RpoFalcon512::new(key_pair.public_key().clone()))
+        .with_auth_component(AuthRpoFalcon512::new(key_pair.public_key().clone()))
         .with_component(BasicWallet);
 
     let (account, seed) = builder.build().unwrap();
@@ -239,7 +241,7 @@ pub async fn create_basic_faucet(
     let builder = AccountBuilder::new(init_seed)
         .account_type(AccountType::FungibleFaucet)
         .storage_mode(AccountStorageMode::Public)
-        .with_auth_component(RpoFalcon512::new(key_pair.public_key()))
+        .with_auth_component(AuthRpoFalcon512::new(key_pair.public_key()))
         .with_component(BasicFungibleFaucet::new(symbol, decimals, max_supply).unwrap());
     let (account, seed) = builder.build().unwrap();
     client.add_account(&account, Some(seed), false).await?;
@@ -425,7 +427,7 @@ pub async fn create_public_note(
 ) -> Result<Note, ClientError> {
     let assembler = if let Some(library) = account_library {
         TransactionKernel::assembler()
-            .with_library(&library)
+            .with_dynamic_library(&library)
             .unwrap()
     } else {
         TransactionKernel::assembler()
@@ -434,7 +436,8 @@ pub async fn create_public_note(
 
     let rng = client.rng();
     let serial_num = rng.draw_word();
-    let note_script = NoteScript::compile(note_code, assembler.clone()).unwrap();
+    let program = assembler.clone().assemble_program(note_code).unwrap();
+    let note_script = NoteScript::new(program);
 
     let note_inputs = note_inputs.unwrap_or_else(|| NoteInputs::new([].to_vec()).unwrap());
     let assets = assets.unwrap_or_else(|| NoteAssets::new(vec![]).unwrap());
@@ -514,15 +517,16 @@ pub fn create_tx_script(
     script_code: String,
     library: Option<Library>,
 ) -> Result<TransactionScript, Error> {
-    let assembler = TransactionKernel::assembler();
-
-    let assembler = match library {
-        Some(lib) => assembler.with_library(lib),
-        None => Ok(assembler.with_debug_mode(true)),
-    }
-    .unwrap();
-    let tx_script = TransactionScript::compile(script_code, assembler).unwrap();
-
+    let tx_script = match library {
+        Some(lib) => ScriptBuilder::new(true)
+            .with_dynamically_linked_library(&lib)
+            .unwrap()
+            .compile_tx_script(script_code)
+            .unwrap(),
+        None => ScriptBuilder::new(true)
+            .compile_tx_script(script_code)
+            .unwrap(),
+    };
     Ok(tx_script)
 }
 
